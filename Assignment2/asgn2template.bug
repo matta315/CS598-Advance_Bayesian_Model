@@ -1,0 +1,11 @@
+model {
+  for (j in 1:12) {
+    psihat[j] ~ dnorm(psi[j],1/(sigma[j]*sigma[j]))
+    psi[j] ~ dnorm(psi0, 1/sigmasq0)
+  }
+
+  psi0 ~ dnorm(0,1/1000^2)
+  sigma0 ~ dunif(0,1000)
+
+  sigmasq0 <- pow(sigma0,2) # calculate σ₀²
+}

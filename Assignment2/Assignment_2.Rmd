@@ -1,0 +1,306 @@
+---
+title: "assignment_2"
+author: "Matta Nguyen"
+date: "2025-02-14"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part 1: 
+### Part 1a
+
+(a) The first prior formulation was
+```θj |α,β∼ Beta(α,β)
+α,β∼ iid Expon(0.001)
+```
+
+  (i) [2 pts] Independently simulate 1000 pairs (α,β) from their hyperprior, and produce a scatter plot of log(β) versus log(α).
+
+
+```{r Similation}
+set.seed(123)
+
+nsims <- 1000
+
+# Stimulate alpha and beta
+alpha_a <- rexp(nsims, rate = 0.001)
+beta_a <- rexp(nsims, rate = 0.001)
+```
+
+```{r Scatter Plot}
+plot(log(alpha_a), log(beta_a),
+     xlab="log(α)",
+     ylab="log(β)",
+     main="1a.Scatterplot of log(β) vs log(α)",
+     pch=20)
+```
+
+(ii) [2 pts] Using the simulated pairs (α,β), forward-simulate θ1, and produce a
+histogram of the result (an approximation of its marginal prior)
+
+```{r}
+theta_1_a <- rbeta(1000, alpha, beta)
+```
+
+
+```{r Histogram}
+
+hist(theta_1_a,
+     breaks=30,
+     main="Histogram of Simulated θ1|α,β Values",
+     xlab="θ1|α,β",
+     freq=FALSE)
+
+```
+
+### Part 1b
+
+(b) The second prior formulation was
+θj |α,β∼ Beta(α,β)
+α = φ1/φ2
+2 β = (1−φ1)/φ2
+2
+φ1 ∼ U(0,1) φ2 ∼ Expon(0.001)
+
+(i) (ii) [2 pts] Independently simulate 1000 pairs (α,β) from their hyperprior, and
+produce a scatterplot of log(β) versus log(α).
+
+```{r}
+# Stimulate phi1 and phi2 based on formula
+
+phi1 <- runif(nsims, 0,1) # phi1 with uniform (0,2)
+phi2 <- rexp(nsims, rate = 0.001) # phi2 with Expon(0.001)
+
+# Calculate α,β
+
+alpha_b <- phi1/phi2^2
+beta_b <- (1-phi1)/phi2^2
+
+```
+
+Scaterplot 
+
+```{r scatterplot}
+plot(log(alpha_b), log(beta_b),
+     xlab="log(α)",
+     ylab="log(β)",
+     main="1b. Scatterplot of log(β) vs log(α)",
+     pch=20)
+```
+
+[2 pts] Using the simulated pairs (α,β), forward-simulate θ1, and produce a
+histogram of the result (an approximation of its marginal prior).
+
+```{r}
+theta_1_b <- rbeta(nsims, alpha_b, beta_b)
+
+# histogram:
+
+hist(theta_1_b,
+     breaks=30,
+     main="Histogram of Simulated θ1_b|α,β Values",
+     xlab="θ1_b|α,β",
+     freq=FALSE)
+```
+
+## Part 2
+### Part 2a:
+
+According to the provided Bayesian hierarchical model we have:
+
+ψ0 ∼ N (0,1000^2) 
+-> Because the variance of this is too big. The prior could be considered as **flat prior**. Therefore the density is **p(ψ₀) ∝ 1 **
+
+σ0 ∼ U(0,1000) approximates this **improper prior** . Therefore density would be **σ₀: p(σ₀) ∝ 1/σ₀ for σ₀ > 0 **
+
+### Part 2b: Draw DAQ
+
+
+
+### Part 2c: JAGS Nodel Statement
+
+Utilzing asgn2template.bug
+
+```{r JAGs}
+model {
+  for (j in 1:12) {
+    psihat[j] ~ dnorm(psi[j],1/(sigma[j]*sigma[j]))
+    psi[j] ~ dnorm(psi0, 1/sigmasq0)
+  }
+
+  psi0 ~ dnorm(0,1/1000^2)
+  sigma0 ~ dunif(0,1000)
+
+  sigmasq0 <- pow(sigma0,2) # calculate σ₀²
+}
+```
+
+### Part 2d: 
+
+Data Set up
+
+```{r}
+data_raw <- read.table("thenumbers.txt")
+
+# Transform data in thenumbers.txt to vector
+psihat <- c(data_raw[,2], data_raw[,5], data_raw[,8])
+sigma <- c(data_raw[,3], data_raw[,6], data_raw[,9])
+
+# Create datalist
+data_list <- list (
+  psihat = psihat,
+  sigma = sigma
+)
+
+# Testing and showing the datalist. 
+head(data_list)
+length(data_list$psihat) #should be 12
+length(data_list$sigma) #should be 12
+```
+Setting up JAGS model
+
+```{r}
+library(rjags)
+jags.model.default <- jags.model("asgn2template.bug", data_list, n.chains = 3)
+```
+### Part 2e:
+
+Running burn-in and draw sample with 10k to 100k iterations
+
+```{r}
+# Burn-in
+update(jags.model.default,10000)
+
+# Draw sample
+samples <- coda.samples(jags.model.default, 
+                       variable.names = c("psi0", "sigmasq0"), 
+                       n.iter = 100000)
+
+# Summary 
+summary_stats <- summary(samples)
+print(summary_stats)
+```
+For both ψ0 and σ20 (not σ0), produce a posterior  and also graphical estimates of the posterior densities. Explicitly give the approximations of
+their posterior expected values, posterior standard deviations, and 95% central
+posterior intervals. 
+
+Numerical Summary
+
+```{r}
+# Extract posterior means and SDs
+post_mean_psi0 <- summary_stats$statistics["psi0", "Mean"]
+post_sd_psi0 <- summary_stats$statistics["psi0", "SD"]
+post_mean_sigmasq0 <- summary_stats$statistics["sigmasq0", "Mean"]
+post_sd_sigmasq0 <- summary_stats$statistics["sigmasq0", "SD"]
+
+# Extract 95% credible intervals
+cred_intervals <- summary_stats$quantiles[, c("2.5%", "97.5%")]
+
+# Displaying result:
+cat("\nPosterior summary for ψ₀:\n")
+cat("Mean:", round(post_mean_psi0, 3), "\n")
+cat("SD:", round(post_sd_psi0, 3), "\n")
+cat("95% CI: [", round(cred_intervals["psi0","2.5%"], 3), 
+    ",", round(cred_intervals["psi0","97.5%"], 3), "]\n")
+
+cat("\nPosterior summary for σ₀²:\n")
+cat("Mean:", round(post_mean_sigmasq0, 3), "\n")
+cat("SD:", round(post_sd_sigmasq0, 3), "\n")
+cat("95% CI: [", round(cred_intervals["sigmasq0","2.5%"], 3), 
+    ",", round(cred_intervals["sigmasq0","97.5%"], 3), "]\n")
+```
+
+Graphical estimate
+
+```{r}
+plot(density(as.matrix(samples)[,"psi0"]), 
+     main="Posterior density of ψ₀",
+     xlab="ψ₀")
+
+plot(density(as.matrix(samples)[,"sigmasq0"]), 
+     main="Posterior density of σ₀²",
+     xlab="σ₀²")
+
+```
+
+### Part 2f:
+
+a new case-control study is to be performed, and assume that its log-odds
+standard error (new σ) will be 0.125.
+
+**(i) New DAG**
+
+**(ii) Adjusted JAG**
+
+```{r}
+new_model <- "
+  model {
+    # Original model
+    for (j in 1:12) {
+    psihat[j] ~ dnorm(psi[j],1/(sigma[j]*sigma[j]))
+    psi[j] ~ dnorm(psi0, 1/sigmasq0)
+  }
+
+  psi0 ~ dnorm(0,1/1000^2)
+  sigma0 ~ dunif(0,1000)
+
+  sigmasq0 <- pow(sigma0,2) # calculate σ₀²
+  
+  # New prediction
+  psi.new ~ dnorm(psi0, 1/sigmasq0)
+  psihat.new ~ dnorm(psi.new, 1/(new.sigma*new.sigma))
+  
+  # Indicator for significance
+  significant <- step(psihat.new - 2*new.sigma)
+  }"
+```
+
+Update Data
+
+```{r}
+# Update data list with new sigma
+data_list_pred <- c(data_list, list(new.sigma = 0.125))
+```
+
+Fit Model
+
+```{r}
+new.jags.model <- jags.model(textConnection(new_model), 
+                             data = data_list_pred, 
+                             n.chains = 3)
+```
+Burn in & Sample
+
+```{r}
+update(new.jags.model, 10000)
+
+# Draw samples
+samples_pred <- coda.samples(new.jags.model, 
+                           variable.names = c("psihat.new", "significant"), 
+                           n.iter = 100000)
+
+summary_pred <- summary(samples_pred)
+```
+
+**(iii) Posterior Mean & Postetior Standard Deviation**
+
+```{r}
+summary_pred <- summary(samples_pred)
+
+cat("\nPredictive distribution for new study's estimated log-odds ratio:\n")
+cat("Mean:", round(summary_pred$statistics["psihat.new", "Mean"], 3), "\n")
+cat("SD:", round(summary_pred$statistics["psihat.new", "SD"], 3), "\n")
+cat("95% Predictive Interval: [",
+    round(summary_pred$quantiles["psihat.new", "2.5%"], 3), ",",
+    round(summary_pred$quantiles["psihat.new", "97.5%"], 3), "]\n")
+```
+**(iv) Probability of significant**
+
+```{r}
+prob_significant <- mean(as.matrix(samples_pred)[, "significant"])
+cat("\nProbability of finding significant positive result:",
+    round(prob_significant, 3), "\n")
+```
