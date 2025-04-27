@@ -1,0 +1,112 @@
+---
+title: "Assignment5"
+author: "Matta Nguyen"
+date: "2025-04-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+File pigweights.csv contains weekly weights of 48 young pigs for each of 9 consecutive weeks.1.
+You will build and compare two different varying-coefficient hierarchical normal regression models
+for the weights, using JAGS and rjags.
+
+#### Question a
+On the same set of axes, plot segmented lines, one for each pig, representing the
+weight versus the week number (1 through 9). Distinguish the lines for different pigs by
+using different colors or line types. (You should label the axes, but no legend is needed.
+
+```{r read_data}
+pigdata <- read.csv("pigweights.csv")
+
+print("Dimension of the data: ")
+print(dim(pigdata))
+
+print("Column Names: ")
+print(colnames(pigdata))
+
+n_rows <- nrow(pigdata)
+n_cols <- ncol(pigdata)
+
+print(paste("Number of rows:", n_rows))
+print(paste("Number of columns:", n_cols))
+```
+```{r plot}
+matplot(1:ncol(pigdata),           # x values matching number of columns
+        t(pigdata),                 # transpose the data
+        type = "l",                 # 'l' for lines
+        xlab = "Week Number",
+        ylab = "Weight",
+        main = "Pig Weight Trajectories Over 9 Weeks")  
+```
+
+#### Question b
+Let ˆβ(j) and ˆβ(j) be the ordinary least squares estimates of β(j) and β(j), estimated for
+pig j. You may use a function like lm or lsfit in R to compute these estimates. (For this part, the coefficient pairs are estimated completely separately for each pig.)
+```{r - prepare-data}
+weight_data <- pigdata[, 2:ncol(pigdata)]
+
+# Get dimensions
+n_pigs <- nrow(weight_data)
+n_weeks <- ncol(weight_data)
+weeks <- 1:n_weeks
+x_centered <- weeks - mean(weeks)
+
+# Setting up variable for beta1_hat & beta2_hat
+beta1_hat <- numeric(n_pigs)
+beta2_hat <- numeric(n_pigs)
+
+# Fit model
+for(j in 1:n_pigs) {
+    # Get weights for pig j
+    y <- as.numeric(weight_data[j,])
+    
+    # Fit linear regression
+    fit <- lm(y ~ x_centered)
+    
+    # Store coefficients
+    beta1_hat[j] <- coef(fit)[1]  # intercept
+    beta2_hat[j] <- coef(fit)[2]  # slope
+}
+```
+i. Scatter plot
+
+```{r scatter plot}
+plot(beta1_hat, beta2_hat,
+     xlab = expression(hat(beta)[1]^"(j)"),
+     ylab = expression(hat(beta)[2]^"(j)"),
+     main = "Scatterplot of Estimated Coefficients",
+     pch = 16)
+```
+
+ii. Give the average (sample mean) of ˆβ(j) and also of ˆβ(j)
+
+```{r}
+#Calculate means
+mean_beta1 <- mean(beta1_hat)
+mean_beta2 <- mean(beta2_hat)
+cat("\n\nMean of β̂₁:", round(mean_beta1, 4))
+cat("\nMean of β̂₂:", round(mean_beta2, 4))
+```
+
+(iii) [1 pt] Give the sample variance of ˆβ(j) and also of ˆβ(j)
+
+```{r}
+#Calculate variance
+var_beta1 <- var(beta1_hat)
+var_beta2 <- var(beta2_hat)
+cat("\n\nVariance of β̂₁:", round(var_beta1, 4))
+cat("\nVariance of β̂₂:", round(var_beta2, 4))
+```
+
+(iv) [1 pt] Give the sample correlation between ˆβ(j) and ˆβ(j)
+
+```{r}
+#Calculate sample correlation
+corr_betas <- cor(beta1_hat, beta2_hat)
+cat("\n\nCorrelation between β̂₁ and β̂₂:", round(corr_betas, 4))
+```
+
+#### Question c
