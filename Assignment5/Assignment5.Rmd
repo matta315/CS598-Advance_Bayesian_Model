@@ -2,7 +2,9 @@
 title: "Assignment5"
 author: "Matta Nguyen"
 date: "2025-04-27"
-output: html_document
+output:
+  word_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -110,3 +112,495 @@ cat("\n\nCorrelation between β̂₁ and β̂₂:", round(corr_betas, 4))
 ```
 
 #### Question c
+
+i. Set up model & run model
+
+```{r jags_model}
+model_string <- "
+model {
+  # Likelihood
+  for (i in 1:N) {
+    for (t in 1:T) {
+      y[i,t] ~ dnorm(mu[i,t], tau.y)
+      mu[i,t] <- beta[i,1] + beta[i,2] * x[t]  # Using centered weeks
+    }
+    
+    # Individual-level coefficients with bivariate normal prior
+    beta[i,1:2] ~ dmnorm(mu.beta[], inv.Sigma.beta[,])
+  }
+  
+  # Hyperpriors for mean (mu.beta)
+  mu.beta[1] ~ dnorm(0, 0.000001)  # precision = 1/1000^2
+  mu.beta[2] ~ dnorm(0, 0.000001)
+  
+  # Wishart prior for precision matrix
+  inv.Sigma.beta[1:2,1:2] ~ dwish(inv.Sigma0[,], 2)
+  Sigma.beta[1:2,1:2] <- inverse(inv.Sigma.beta[,])
+  
+  # Calculate variance components and correlation
+  sigma.beta1 <- sqrt(Sigma.beta[1,1])
+  sigma.beta2 <- sqrt(Sigma.beta[2,2])
+  rho <- Sigma.beta[1,2]/(sigma.beta1 * sigma.beta2)
+  
+  # Prior for residual variance (inverse gamma via precision)
+  tau.y ~ dgamma(0.0001, 0.0001)
+  sigma2.y <- 1/tau.y
+}"
+```
+
+Run model 
+
+```{r}
+library(rjags)
+library(coda)
+
+# Set up the data list for JAGS
+Sigma0 <- matrix(c(15, 0, 0, 0.5), 2, 2)
+inv.Sigma0 <- solve(Sigma0)/2  
+
+jags_data <- list(
+  y = as.matrix(weight_data),
+  x = x_centered,
+  N = n_pigs,
+  T = n_weeks,
+  inv.Sigma0 = inv.Sigma0
+)
+
+# Better initialization function
+init_values <- function() {
+  # Fit simple linear model to get reasonable starting values
+  time_data <- rep(x_centered, each=n_pigs)
+  weight_vector <- as.vector(as.matrix(weight_data))
+  lm_fit <- lm(weight_vector ~ time_data)
+  
+  # Use fitted values to initialize
+  list(
+    mu.beta = c(coef(lm_fit)[1], coef(lm_fit)[2]),
+    inv.Sigma.beta = solve(Sigma0),  
+    tau.y = 1/var(residuals(lm_fit))  
+  )
+}
+
+# Initialize three chains with slightly different starting points
+set.seed(123)  
+inits <- list(
+  init_values(),
+  list(
+    mu.beta = init_values()$mu.beta * 1.1,  # Slightly different values
+    inv.Sigma.beta = init_values()$inv.Sigma.beta,
+    tau.y = init_values()$tau.y * 1.1
+  ),
+  list(
+    mu.beta = init_values()$mu.beta * 0.9,
+    inv.Sigma.beta = init_values()$inv.Sigma.beta,
+    tau.y = init_values()$tau.y * 0.9
+  )
+)
+
+# Compile the model
+jags_model <- jags.model(textConnection(model_string),
+                        data = jags_data,
+                        inits = inits,
+                        n.chains = 3)
+
+# Longer burn-in
+print("Running burn-in...")
+update(jags_model, 10000)
+
+# Monitor parameters with more iterations
+print("Sampling...")
+samples <- coda.samples(jags_model,
+                       variable.names = c("mu.beta", "Sigma.beta", "sigma2.y", "rho"),
+                       n.iter = 20000,
+                       thin = 10)  # Added thinning
+
+# Try convergence diagnostics with try()
+print("Checking convergence...")
+try({
+  gelman <- gelman.diag(samples)
+  print("Gelman-Rubin diagnostics:")
+  print(gelman)
+})
+
+# Check effective sample sizes
+eff_size <- effectiveSize(samples)
+print("\nEffective sample sizes:")
+print(eff_size)
+```
+ii. Display the coda summary:
+
+```{r coda summary}
+# Summary of results
+print("\nParameter estimates:")
+print(summary(samples))
+```
+
+iii. Give an approximate 95% central posterior interval for the correlation
+parameter ρ, and also produce a graph of its (estimated) posterior density. Does it
+seem like a good idea to allow ρ to be nonzero
+
+```{r}
+rho_samples <- do.call(rbind, lapply(samples, function(x) x[,"rho"]))
+
+# Calculate 95% credible interval
+rho_ci <- quantile(rho_samples, c(0.025, 0.975))
+print("95% Credible Interval for rho:")
+print(rho_ci)
+```
+
+Given than 0 is not in the credible interval, it might be a good idea to allow p to be non-zero in this model
+
+iv. he population mean regression line represents the expected weight of an
+“average” pig at week x. Form an approximate 95% central posterior interval for this
+expected weight at week 1 (x = 1)
+
+```{r}
+extract_samples <- function(samples) {
+    # Extract mu_beta samples
+    mu_beta1 <- do.call(rbind, lapply(samples, function(x) x[,"mu.beta[1]"]))
+    mu_beta2 <- do.call(rbind, lapply(samples, function(x) x[,"mu.beta[2]"]))
+    
+    # Combine into matrix
+    cbind(mu_beta1, mu_beta2)
+}
+
+# Get samples
+param_samples <- extract_samples(samples)
+
+# Calculate mean weight at week 1
+x <- 1  # Week 1
+x_centered <- x - mean(weeks)  
+
+# Calculate expected weight for each MCMC sample
+expected_weights <- param_samples[,1] + param_samples[,2] * x_centered
+
+# Calculate 95% credible interval
+ci <- quantile(expected_weights, c(0.025, 0.975))
+
+# Print results
+print("95% Credible Interval for expected weight at week 1:")
+print(ci)
+
+```
+
+v. Form an approximate 95% central posterior interval for the population variance
+of the expected weight at week 1 (x = 1).
+
+```{r}
+# Extract required parameters from MCMC samples
+extract_variance_params <- function(samples) {
+    # Extract variance components and correlation
+    sigma_beta1 <- do.call(rbind, lapply(samples, function(x) x[,"Sigma.beta[1,1]"]))
+    sigma_beta2 <- do.call(rbind, lapply(samples, function(x) x[,"Sigma.beta[2,2]"]))
+    rho <- do.call(rbind, lapply(samples, function(x) x[,"rho"]))
+    
+    # Calculate sigma_beta1 and sigma_beta2 as square roots of variances
+    sigma_beta1 <- sqrt(sigma_beta1)
+    sigma_beta2 <- sqrt(sigma_beta2)
+    
+    # Return as matrix
+    cbind(sigma_beta1, sigma_beta2, rho)
+}
+
+# Get samples
+variance_params <- extract_variance_params(samples)
+
+# Calculate population variance at week 1
+x <- 1  # Week 1
+x_centered <- x - mean(weeks)  # Center using mean of weeks
+
+# Calculate variance using the formula
+population_variance <- variance_params[,1]^2 + 
+                      2 * x_centered * variance_params[,3] * variance_params[,1] * variance_params[,2] +
+                      (x_centered^2) * variance_params[,2]^2
+
+# Calculate 95% credible interval for the variance
+variance_ci <- quantile(population_variance, c(0.025, 0.975))
+
+# Print results
+print("95% Credible Interval for population variance at week 1:")
+print(variance_ci)
+
+```
+
+vi. Simple calculus shows that the population variance of the expected weight of a
+random pig is minimized at
+xmin = ¯x − ρ σβ1 /σβ2
+Approximate the posterior probability that xmin < 1, i.e., that the minimum occurs
+before the week 1 time point
+
+```{r}
+# Extract required parameters from MCMC samples
+extract_params <- function(samples) {
+    # Extract variance components and correlation
+    sigma_beta1 <- sqrt(do.call(rbind, lapply(samples, function(x) x[,"Sigma.beta[1,1]"])))
+    sigma_beta2 <- sqrt(do.call(rbind, lapply(samples, function(x) x[,"Sigma.beta[2,2]"])))
+    rho <- do.call(rbind, lapply(samples, function(x) x[,"rho"]))
+    
+    # Return as matrix
+    cbind(sigma_beta1, sigma_beta2, rho)
+}
+
+# Get samples
+params <- extract_params(samples)
+
+# Calculate xmin for each MCMC sample
+# xmin = x̄ - ρ * (σβ1/σβ2)
+xmin <- mean(weeks) - params[,3] * (params[,1]/params[,2])
+
+# Calculate probability that xmin < 1
+prob_xmin_less_than_1 <- mean(xmin < 1)  # This calculates the proportion of xmin values less than 1
+
+# Print results
+print(paste("Posterior probability that xmin < 1:", round(prob_xmin_less_than_1, 3)))
+
+```
+
+vii. The prior probability that xmin < 1 turns out to be approximately 0.205.
+Approximate the Bayes factor favoring xmin < 1 versus xmin ≥ 1. Then describe the
+level of data evidence for xmin < 1
+
+```{r}
+# posterior_prob = mean(xmin < 1)
+posterior_prob = prob_xmin_less_than_1 
+prior_prob = 0.205
+
+# Calculate posterior odds
+posterior_odds = posterior_prob / (1 - posterior_prob)
+
+# Calculate prior odds
+prior_odds = prior_prob / (1 - prior_prob)
+
+# Calculate Bayes factor
+bayes_factor = posterior_odds / prior_odds
+
+# Print results
+print(paste("Posterior probability:", round(posterior_prob, 3)))
+print(paste("Posterior odds:", round(posterior_odds, 3)))
+print(paste("Prior odds:", round(prior_odds, 3)))
+print(paste("Bayes factor:", round(bayes_factor, 3)))
+
+# Interpret Bayes factor using common guidelines
+interpret_bf = function(bf) {
+    if(bf < 1/100) return("Extreme evidence against xmin < 1")
+    else if(bf < 1/30) return("Very strong evidence against xmin < 1")
+    else if(bf < 1/10) return("Strong evidence against xmin < 1")
+    else if(bf < 1/3) return("Moderate evidence against xmin < 1")
+    else if(bf < 3) return("Weak or anecdotal evidence")
+    else if(bf < 10) return("Moderate evidence for xmin < 1")
+    else if(bf < 30) return("Strong evidence for xmin < 1")
+    else if(bf < 100) return("Very strong evidence for xmin < 1")
+    else return("Extreme evidence for xmin < 1")
+}
+
+print(paste("Interpretation:", interpret_bf(bayes_factor)))
+
+```
+
+viii: Use the rjags function dic.samples to compute the effective number of
+parameters (“penalty”) and Plummer’s DIC (“Penalized deviance”). Use at least
+100,000 iterations
+
+```{r}
+# Compute DIC with 100,000 iterations
+dic_output_c <- dic.samples(jags_model, n.iter=100000)
+
+# Print results
+print("DIC Results:")
+print(dic_output_c)
+```
+
+#### Question d
+i. Draw DAG for this model
+
+                 N(0,1000²)                    U(0,1000)
+                     |                             |
+                     ↓                             ↓
+                    μβ₁ → β₁⁽ʲ⁾ ←---------------- σβ₁             
+                           ↘                      
+                              ↘                   
+                                 ↘                
+                                    ↓             
+                                    y ← σ²y 
+                                    ↑             
+                                 ↗                
+                              ↗                   
+                           ↗                      
+                    μβ₂ → β₂⁽ʲ⁾ ←---------------- σβ₂             
+                     ↑                             ↑
+                     |                             |
+                 N(0,1000²)                    U(0,1000)
+
+
+
+
+ii. List an appropriate JAGS model. Make sure that there are nodes for σ2β1 , σ2β2 ,and σ2y .
+
+```{r}
+model_d_string <- "
+model {
+  # Likelihood
+  for (i in 1:N) {
+    for (t in 1:T) {
+      y[i,t] ~ dnorm(mu[i,t], tau.y)
+      mu[i,t] <- beta[i,1] + beta[i,2] * weeks[t]  # Using weeks directly
+    }
+    
+    # Individual-level coefficients with independent normal priors
+    beta[i,1] ~ dnorm(mu.beta1, tau.beta1)
+    beta[i,2] ~ dnorm(mu.beta2, tau.beta2)
+  }
+  
+  # Hyperpriors for means
+  mu.beta1 ~ dnorm(0, 0.000001)  # precision = 1/1000^2
+  mu.beta2 ~ dnorm(0, 0.000001)
+  
+  # Hyperpriors for standard deviations (uniform on SD scale)
+  sigma.beta1 ~ dunif(0, 1000)
+  sigma.beta2 ~ dunif(0, 1000)
+  
+  # Convert to precision parameters
+  tau.beta1 <- 1/(sigma.beta1 * sigma.beta1)
+  tau.beta2 <- 1/(sigma.beta2 * sigma.beta2)
+  
+  # Prior for residual variance (inverse gamma via precision)
+  tau.y ~ dgamma(0.0001, 0.0001)
+  
+  # Calculate variance parameters for monitoring
+  sigma2.beta1 <- sigma.beta1 * sigma.beta1
+  sigma2.beta2 <- sigma.beta2 * sigma.beta2
+  sigma2.y <- 1/tau.y
+}"
+
+# Set up the data list for JAGS
+jags_data <- list(
+  y = as.matrix(weight_data),
+  weeks = 1:n_weeks,  # Using weeks directly
+  N = n_pigs,
+  T = n_weeks
+)
+
+# Set up initial values for multiple chains
+init_values <- function() {
+  list(
+    mu.beta1 = rnorm(1, 0, 10),
+    mu.beta2 = rnorm(1, 0, 10),
+    sigma.beta1 = runif(1, 1, 10),
+    sigma.beta2 = runif(1, 1, 10),
+    tau.y = rgamma(1, 1, 1)
+  )
+}
+
+# Initialize three chains with different starting points
+set.seed(123)
+inits <- list(init_values(), init_values(), init_values())
+
+# Compile the model
+jags_model <- jags.model(textConnection(model_d_string),
+                        data = jags_data,
+                        inits = inits,
+                        n.chains = 3)
+
+# Burn-in
+print("Running burn-in...")
+update(jags_model, 10000)
+
+# Monitor parameters
+params <- c("mu.beta1", "mu.beta2", "sigma2.beta1", "sigma2.beta2", "sigma2.y")
+print("Sampling...")
+samples <- coda.samples(jags_model,
+                       variable.names = params,
+                       n.iter = 20000,
+                       thin = 10)
+
+# Check convergence
+print("Checking convergence...")
+gelman <- gelman.diag(samples)
+print("Gelman-Rubin diagnostics:")
+print(gelman)
+
+# Check effective sample sizes
+eff_size <- effectiveSize(samples)
+print("\nEffective sample sizes:")
+print(eff_size)
+
+```
+
+iii. 
+
+```{r}
+# Summary of results
+print("\nParameter estimates:")
+print(summary(samples))
+```
+
+iv. Recall the expected weight at week 1 (x = 1) of an “average” pig, as considered
+in the previous analysis. Form an approximate 95% central posterior interval for this
+expected weight, and compare it with the result from the previous model.
+
+```{r}
+ # Extract required parameters from MCMC samples for new model
+extract_samples <- function(samples) {
+    # Extract mu_beta samples
+    mu_beta1 <- do.call(rbind, lapply(samples, function(x) x[,"mu.beta1"]))
+    mu_beta2 <- do.call(rbind, lapply(samples, function(x) x[,"mu.beta2"]))
+    
+    # Combine into matrix
+    cbind(mu_beta1, mu_beta2)
+}
+
+# Get samples
+param_samples <- extract_samples(samples)
+
+# Calculate mean weight at week 1
+x <- 1  # Week 1
+expected_weights <- param_samples[,1] + param_samples[,2] * x
+
+# Calculate 95% credible interval for new model
+ci_new <- quantile(expected_weights, c(0.025, 0.975))
+
+# Print results
+print("95% Credible Interval for expected weight at week 1 (new model):")
+print(ci_new)
+
+# Print previous model's results for comparison
+print("\nPrevious model's 95% Credible Interval:")
+print(ci)  # from the previous analysis
+
+# Compare intervals
+print("\nComparison:")
+print(paste("New model interval width:", round(diff(ci_new), 3)))
+print(paste("Previous model interval width:", round(diff(ci), 3)))
+
+```
+v. 
+
+```{r}
+jags_model <- jags.model(textConnection(model_d_string),
+                        data = jags_data,
+                        inits = inits,
+                        n.chains = 3)
+
+# Burn-in
+update(jags_model, 10000)
+
+# Compute DIC with 100,000 iterations
+dic_output_b <- dic.samples(jags_model, 
+                         type = "pD",  # specify the type of DIC
+                         n.iter = 100000)
+
+# Print results
+print("DIC Results:")
+print(dic_output_b)
+```
+vi. Compare the two DIC results:
+
+```{r}
+# Print results
+print("DIC Results at example c:")
+print(dic_output_c)
+
+print("DIC Results at example d:")
+print(dic_output_b)
+```
+DIC values are almost identical, therefore we might prefer the simpler model since it's achiving the same result with simplier structure
